@@ -41,3 +41,4 @@ USING (
 -- Verify the bucket was created
 SELECT * FROM storage.buckets WHERE id = 'issue-images';
 
+

@@ -23,14 +23,14 @@ export default function App() {
       <main className="pt-24 px-4 min-h-screen">
         <Routes>
           <Route path="/" element={<Home />} />
-          <Route path="/report" element={<ProtectedRoute><Report /></ProtectedRoute>} />
+          <Route path="/report" element={<ProtectedRoute requireProfile={true}><Report /></ProtectedRoute>} />
           <Route path="/issues" element={<Issues />} />
           <Route path="/issues/:id" element={<IssueDetail />} />
           <Route path="/about" element={<About />} />
           <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
-          <Route path="/groups" element={<ProtectedRoute><Groups /></ProtectedRoute>} />
-          <Route path="/groups/create" element={<ProtectedRoute><CreateGroupPage /></ProtectedRoute>} />
-          <Route path="/groups/:id" element={<ProtectedRoute><GroupPage /></ProtectedRoute>} />
+          <Route path="/groups" element={<ProtectedRoute requireProfile={true}><Groups /></ProtectedRoute>} />
+          <Route path="/groups/create" element={<ProtectedRoute requireProfile={true}><CreateGroupPage /></ProtectedRoute>} />
+          <Route path="/groups/:id" element={<ProtectedRoute requireProfile={true}><GroupPage /></ProtectedRoute>} />
           <Route path="/leaderboard" element={<Leaderboard />} />
 
 

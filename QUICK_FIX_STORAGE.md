@@ -119,3 +119,4 @@ The folder structure is: `{user_id}/issue-{timestamp}.{ext}`
 
 This ensures users can only upload/delete their own files, but everyone can view them.
 
+

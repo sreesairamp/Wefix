@@ -583,3 +583,4 @@ npm run preview      # Preview production build locally
 **Version**: 1.0.0
 **Status**: Production Ready (pending backend payment API)
 
+

@@ -10,12 +10,53 @@ export default function Login() {
 
   const handleEmailLogin = async (e) => {
     e.preventDefault();
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    
+    if (!email.trim() || !password.trim()) {
+      return alert("Please enter both email and password");
+    }
 
-    if (error) return alert(error.message);
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
 
-    await createUserProfile(data.user);
-    navigate("/");
+      if (error) {
+        // Check for specific error messages
+        if (error.message.includes("Invalid login credentials") || error.message.includes("Email not confirmed")) {
+          alert("Invalid email or password. If you just signed up, please check your email to confirm your account.");
+        } else {
+          alert(error.message);
+        }
+        return;
+      }
+
+      if (!data.user) {
+        alert("Login failed. Please try again.");
+        return;
+      }
+
+      // Ensure profile exists
+      const profileResult = await createUserProfile(data.user);
+      if (!profileResult.success) {
+        console.error("Profile check failed:", profileResult.error);
+      }
+
+      // Check if profile is complete
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("full_name")
+        .eq("id", data.user.id)
+        .single();
+
+      if (!profile?.full_name || profile.full_name.trim().length === 0) {
+        // Redirect to profile to complete it
+        alert("Please complete your profile first!");
+        navigate("/profile");
+      } else {
+        navigate("/");
+      }
+    } catch (err) {
+      console.error("Login error:", err);
+      alert("An error occurred during login. Please try again.");
+    }
   };
 
   const loginWithGoogle = async () => {

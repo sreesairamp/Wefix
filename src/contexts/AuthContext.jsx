@@ -11,14 +11,65 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     const getSession = async () => {
       const { data } = await supabase.auth.getSession();
-      setUser(data?.session?.user ?? null);
+      const user = data?.session?.user ?? null;
+      
+      // If user exists, ensure profile exists
+      if (user) {
+        try {
+          const { data: profile } = await supabase
+            .from("profiles")
+            .select("id")
+            .eq("id", user.id)
+            .single();
+          
+          // Create profile if it doesn't exist
+          if (!profile) {
+            await supabase.from("profiles").insert([{
+              id: user.id,
+              email: user.email,
+              full_name: user.user_metadata?.full_name || user.email?.split('@')[0] || "",
+              avatar_url: user.user_metadata?.avatar_url || user.user_metadata?.picture || "",
+              points: 0
+            }]);
+          }
+        } catch (err) {
+          console.error("Error checking/creating profile:", err);
+        }
+      }
+      
+      setUser(user);
       setLoading(false);
     };
 
     getSession();
 
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
+    const { data: listener } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      const user = session?.user ?? null;
+      
+      // Ensure profile exists when auth state changes
+      if (user) {
+        try {
+          const { data: profile } = await supabase
+            .from("profiles")
+            .select("id")
+            .eq("id", user.id)
+            .single();
+          
+          if (!profile) {
+            await supabase.from("profiles").insert([{
+              id: user.id,
+              email: user.email,
+              full_name: user.user_metadata?.full_name || user.email?.split('@')[0] || "",
+              avatar_url: user.user_metadata?.avatar_url || user.user_metadata?.picture || "",
+              points: 0
+            }]);
+          }
+        } catch (err) {
+          console.error("Error checking/creating profile:", err);
+        }
+      }
+      
+      setUser(user);
     });
 
     return () => listener.subscription.unsubscribe();

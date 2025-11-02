@@ -1,15 +1,20 @@
 import { useState, useRef, useEffect } from 'react';
-import { processChatMessage, analyzeUserIssue } from '../utils/chatAI';
+import { processChatMessage, analyzeUserIssue, processSimilarIssuesRequest } from '../utils/chatAI';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../contexts/AuthContext';
+import { saveConversation, createSessionId, exportConversation, clearConversation, getConversation } from '../utils/conversationMemory';
+import { renderMarkdown } from '../utils/markdownRenderer';
+import { getPlatformStats } from '../utils/getStats';
+import { generateSmartSuggestions, detectIntent, getContextualHelp } from '../utils/chatbotEnhancements';
 
 export default function AIAssistant() {
   const [isOpen, setIsOpen] = useState(false);
+  const [sessionId] = useState(() => createSessionId());
   const [messages, setMessages] = useState([
     {
       id: 1,
       type: 'ai',
-      content: "Hello! I'm WeFix Smart AI. I can help you report issues, analyze images, classify problems, and answer questions about civic issues. How can I assist you today?",
+      content: "Hello! I'm WeFix Smart AI. I can help you report issues, analyze images, classify problems, find similar issues, and answer questions about civic issues. How can I assist you today?",
       timestamp: new Date()
     }
   ]);
@@ -17,15 +22,26 @@ export default function AIAssistant() {
   const [isTyping, setIsTyping] = useState(false);
   const [pendingImage, setPendingImage] = useState(null);
   const [pendingImagePreview, setPendingImagePreview] = useState(null);
+  const [isListening, setIsListening] = useState(false);
+  const [locationInfo, setLocationInfo] = useState(null);
+  const [similarIssues, setSimilarIssues] = useState([]);
   const { user } = useAuth();
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
   const fileInputRef = useRef(null);
+  const recognitionRef = useRef(null);
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // Save conversation to memory
+  useEffect(() => {
+    if (messages.length > 1) {
+      saveConversation(sessionId, messages);
+    }
+  }, [messages, sessionId]);
 
   // Focus input when chat opens
   useEffect(() => {
@@ -34,14 +50,47 @@ export default function AIAssistant() {
     }
   }, [isOpen]);
 
-  const addMessage = (type, content, analysis = null) => {
+  // Initialize speech recognition if available
+  useEffect(() => {
+    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      recognitionRef.current = new SpeechRecognition();
+      recognitionRef.current.continuous = false;
+      recognitionRef.current.interimResults = false;
+      recognitionRef.current.lang = 'en-US';
+      
+      recognitionRef.current.onresult = (event) => {
+        const transcript = event.results[0][0].transcript;
+        setInputValue(transcript);
+        setIsListening(false);
+      };
+      
+      recognitionRef.current.onerror = () => {
+        setIsListening(false);
+      };
+      
+      recognitionRef.current.onend = () => {
+        setIsListening(false);
+      };
+    }
+    return () => {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+    };
+  }, []);
+
+  const addMessage = (type, content, analysis = null, locationInfo = null, similarIssues = null, suggestions = null) => {
+    const messageObj = typeof content === 'string' ? { content } : content;
     const newMessage = {
       id: Date.now(),
       type,
-      content,
+      content: typeof content === 'string' ? content : messageObj.content || content,
       analysis,
+      locationInfo,
+      similarIssues,
       timestamp: new Date(),
-      suggestions: content.suggestions || []
+      suggestions: suggestions || messageObj.suggestions || []
     };
     setMessages(prev => [...prev, newMessage]);
     return newMessage;
@@ -72,55 +121,130 @@ export default function AIAssistant() {
       }
     }
 
+    const messageToSend = userMessage;
     setInputValue('');
     setIsTyping(true);
 
     try {
-      // If there's an image or substantial text, analyze it
-      if (pendingImage || (userMessage.length > 10 && !userMessage.match(/^(hi|hello|hey|help|what|how)/i))) {
-        const analysisResult = await analyzeUserIssue(userMessage || 'Issue detected from image', pendingImage);
-        
-        simulateTyping(() => {
-          addMessage('ai', analysisResult.content, analysisResult.analysis);
+      // Process as chat message first to determine intent
+      const response = await processChatMessage(messageToSend, messages);
+      
+      if (response.type === 'analysis_request') {
+        // Analyze issue
+        simulateTyping(async () => {
+          const analysisResult = await analyzeUserIssue(messageToSend || 'Issue detected from image', pendingImage);
+          setLocationInfo(analysisResult.locationInfo || null);
+          setSimilarIssues(analysisResult.similarIssues || []);
+          addMessage('ai', analysisResult.content, analysisResult.analysis, analysisResult.locationInfo, analysisResult.similarIssues, analysisResult.suggestions);
           setPendingImage(null);
           setPendingImagePreview(null);
+          setIsTyping(false);
         }, 1200);
+      } else if (response.type === 'similar_issues_request') {
+        // Find similar issues
+        simulateTyping(async () => {
+          const similarResult = await processSimilarIssuesRequest(response.previousIssue || messageToSend);
+          setSimilarIssues(similarResult.similarIssues || []);
+          addMessage('ai', similarResult.content, null, null, similarResult.similarIssues, similarResult.suggestions);
+          setIsTyping(false);
+        }, 1500);
+      } else if (response.type === 'stats_request') {
+        // Get platform statistics
+        simulateTyping(async () => {
+          const stats = await getPlatformStats();
+          const statsMessage = `Here are the current platform statistics:\n\n` +
+            `📊 **Total Issues**: ${stats.totalIssues}\n` +
+            `✅ **Resolved**: ${stats.resolvedIssues}\n` +
+            `👥 **Total Users**: ${stats.totalUsers}\n` +
+            `🏘️ **Active Groups**: ${stats.totalGroups}\n` +
+            `💰 **Active Fundraisers**: ${stats.activeFundraisers}\n` +
+            `💵 **Total Donations**: $${stats.totalDonations.toFixed(2)}\n\n` +
+            `Great job everyone! Keep reporting and fixing issues! 🎉`;
+          addMessage('ai', statsMessage);
+          setIsTyping(false);
+        }, 1000);
       } else {
-        // Process as chat message
-        const response = processChatMessage(userMessage, messages);
+        // Regular chat response - enhance with smart suggestions if none provided
+        const suggestions = response.suggestions && response.suggestions.length > 0 
+          ? response.suggestions 
+          : generateSmartSuggestions(messages, messageToSend);
         
         simulateTyping(() => {
-          if (response.type === 'analysis_request') {
-            // Trigger analysis
-            handleAnalyzeIssue(response.userMessage, pendingImage);
-          } else {
-            addMessage('ai', response.content);
-          }
-          
+          addMessage('ai', response.content, null, null, null, suggestions);
           if (pendingImage) {
             setPendingImage(null);
             setPendingImagePreview(null);
           }
+          setIsTyping(false);
         }, 800);
       }
     } catch (error) {
       console.error('Chat error:', error);
-      simulateTyping(() => {
-        addMessage('ai', "I encountered an error. Please try again.");
-      });
+      setIsTyping(false);
+      addMessage('ai', "I encountered an error. Please try again.");
     }
   };
 
   const handleAnalyzeIssue = async (text, imageFile) => {
     try {
       const analysisResult = await analyzeUserIssue(text, imageFile);
-      addMessage('ai', analysisResult.content, analysisResult.analysis);
+      setLocationInfo(analysisResult.locationInfo || null);
+      setSimilarIssues(analysisResult.similarIssues || []);
+      addMessage('ai', analysisResult.content, analysisResult.analysis, analysisResult.locationInfo, analysisResult.similarIssues, analysisResult.suggestions);
       setPendingImage(null);
       setPendingImagePreview(null);
     } catch (error) {
       console.error('Analysis error:', error);
       addMessage('ai', "I encountered an error while analyzing. Please try again.");
     }
+  };
+
+  const handleVoiceInput = () => {
+    if (!recognitionRef.current) {
+      addMessage('ai', "Sorry, voice input is not supported in your browser.");
+      return;
+    }
+    
+    if (isListening) {
+      recognitionRef.current.stop();
+      setIsListening(false);
+    } else {
+      setIsListening(true);
+      recognitionRef.current.start();
+    }
+  };
+
+  const handleExportConversation = () => {
+    const exportData = exportConversation(sessionId);
+    if (!exportData) {
+      addMessage('ai', "No conversation to export.");
+      return;
+    }
+    
+    const blob = new Blob([exportData], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `wefix-conversation-${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    
+    addMessage('ai', "Conversation exported successfully! 📥");
+  };
+
+  const handleClearConversation = () => {
+    clearConversation(sessionId);
+    setMessages([{
+      id: 1,
+      type: 'ai',
+      content: "Hello! I'm WeFix Smart AI. I can help you report issues, analyze images, classify problems, find similar issues, and answer questions about civic issues. How can I assist you today?",
+      timestamp: new Date()
+    }]);
+    setLocationInfo(null);
+    setSimilarIssues([]);
+    addMessage('ai', "Conversation cleared. How can I help you?");
   };
 
   const handleImageChange = (e) => {
@@ -185,6 +309,10 @@ export default function AIAssistant() {
                        analysis.textAnalysis?.category || 
                        'Other';
 
+      // Get location from the last message or default
+      const lastAIMessage = messages.filter(m => m.type === 'ai').slice(-1)[0];
+      const issueLocationInfo = lastAIMessage?.locationInfo || locationInfo;
+
       const { error } = await supabase.from('issues').insert([{
         title: userDescription.substring(0, 100) || 'AI Detected Issue',
         description: userDescription.length > 100 ? userDescription : userDescription,
@@ -196,8 +324,8 @@ export default function AIAssistant() {
         ai_confidence: analysis.textAnalysis?.confidence || 0.5,
         ai_sentiment: analysis.sentiment?.sentiment || 'neutral',
         ai_spam_detected: analysis.spam?.isSpam || false,
-        latitude: 17.385,
-        longitude: 78.4867,
+        latitude: issueLocationInfo?.lat || 17.385,
+        longitude: issueLocationInfo?.lng || 78.4867,
       }]);
 
       if (error) {
@@ -256,26 +384,36 @@ export default function AIAssistant() {
                 </p>
               </div>
             </div>
-            <button
-              onClick={() => {
-                setIsOpen(false);
-                // Reset conversation when closing
-                setMessages([{
-                  id: 1,
-                  type: 'ai',
-                  content: "Hello! I'm WeFix Smart AI. I can help you report issues, analyze images, classify problems, and answer questions about civic issues. How can I assist you today?",
-                  timestamp: new Date()
-                }]);
-                setInputValue('');
-                setPendingImage(null);
-                setPendingImagePreview(null);
-              }}
-              className="text-white hover:text-gray-200 transition-colors p-1 hover:bg-white/10 rounded"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleExportConversation}
+                className="text-white hover:text-gray-200 transition-colors p-1 hover:bg-white/10 rounded"
+                title="Export conversation"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+              </button>
+              <button
+                onClick={handleClearConversation}
+                className="text-white hover:text-gray-200 transition-colors p-1 hover:bg-white/10 rounded"
+                title="Clear conversation"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+              </button>
+              <button
+                onClick={() => {
+                  setIsOpen(false);
+                }}
+                className="text-white hover:text-gray-200 transition-colors p-1 hover:bg-white/10 rounded"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
           </div>
 
           {/* Messages Container */}
@@ -308,9 +446,53 @@ export default function AIAssistant() {
                     />
                   )}
                   
-                  <div className="whitespace-pre-wrap break-words text-sm leading-relaxed">
-                    {message.content}
-                  </div>
+                  <div 
+                    className="whitespace-pre-wrap break-words text-sm leading-relaxed prose prose-sm max-w-none"
+                    dangerouslySetInnerHTML={{ __html: message.type === 'ai' ? renderMarkdown(message.content) : message.content.replace(/\n/g, '<br />') }}
+                  />
+                  
+                  {/* Location Info Display */}
+                  {message.locationInfo && message.locationInfo.source === 'text' && (
+                    <div className="mt-3 pt-3 border-t border-gray-200/50">
+                      <div className="flex items-start gap-2 text-xs">
+                        <svg className="w-4 h-4 text-blue-600 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                        </svg>
+                        <div>
+                          <p className="font-semibold text-gray-700">Location Detected:</p>
+                          <p className="text-gray-600">{message.locationInfo.locationText}</p>
+                          {message.locationInfo.displayName && (
+                            <p className="text-gray-500 italic mt-1">{message.locationInfo.displayName}</p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Similar Issues Display */}
+                  {message.similarIssues && message.similarIssues.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-gray-200/50">
+                      <p className="text-xs font-semibold text-gray-700 mb-2">Similar Issues:</p>
+                      <div className="space-y-2">
+                        {message.similarIssues.slice(0, 3).map((issue, idx) => (
+                          <div key={idx} className="bg-gray-50 rounded-lg p-2 text-xs">
+                            <p className="font-medium text-gray-800 truncate">{issue.title}</p>
+                            <div className="flex items-center gap-2 mt-1">
+                              <span className={`px-2 py-0.5 rounded text-xs ${
+                                issue.status === 'Resolved' ? 'bg-green-100 text-green-700' :
+                                issue.status === 'In-Progress' ? 'bg-blue-100 text-blue-700' :
+                                'bg-gray-100 text-gray-700'
+                              }`}>
+                                {issue.status}
+                              </span>
+                              <span className="text-gray-500">{issue.ai_category}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   
                   {message.analysis && (
                     <div className="mt-3 pt-3 border-t border-gray-200/50">
@@ -441,11 +623,29 @@ export default function AIAssistant() {
               <label
                 htmlFor="chat-image-upload"
                 className="flex items-center justify-center w-10 h-10 rounded-full bg-gray-100 hover:bg-gray-200 transition-colors cursor-pointer flex-shrink-0"
+                title="Upload image"
               >
                 <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
                 </svg>
               </label>
+              
+              {/* Voice Input Button */}
+              {recognitionRef.current && (
+                <button
+                  onClick={handleVoiceInput}
+                  className={`flex items-center justify-center w-10 h-10 rounded-full transition-colors flex-shrink-0 ${
+                    isListening 
+                      ? 'bg-red-100 hover:bg-red-200 text-red-600 animate-pulse' 
+                      : 'bg-gray-100 hover:bg-gray-200 text-gray-600'
+                  }`}
+                  title={isListening ? "Listening... Click to stop" : "Voice input"}
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                  </svg>
+                </button>
+              )}
 
               <div className="flex-1 relative">
                 <textarea

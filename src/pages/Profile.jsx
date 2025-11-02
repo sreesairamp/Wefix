@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams, useNavigate } from "react-router-dom";
 import { supabase } from "../supabaseClient";
 import { useAuth } from "../contexts/AuthContext";
 
 export default function Profile() {
   const { user } = useAuth();
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const showCompletionPrompt = searchParams.get("complete") === "true";
   const [profile, setProfile] = useState({ 
     full_name: "", 
     email: "", 
@@ -132,6 +135,12 @@ export default function Profile() {
   const saveProfile = async () => {
     if (!user) return;
 
+    // Validate required fields
+    if (!profile.full_name || profile.full_name.trim().length === 0) {
+      alert("Please enter your full name. This is required to use all features.");
+      return;
+    }
+
     setSaving(true);
     try {
       const { error } = await supabase
@@ -153,6 +162,13 @@ export default function Profile() {
       }
 
       alert("Profile Saved ✅");
+      
+      // If this was a completion prompt, redirect to home
+      if (showCompletionPrompt) {
+        setTimeout(() => {
+          navigate("/");
+        }, 1000);
+      }
     } catch (err) {
       console.error("Unexpected error:", err);
       alert("Save failed ❌");
@@ -177,6 +193,26 @@ export default function Profile() {
 
   return (
     <div className="min-h-screen p-6 space-y-6 max-w-6xl mx-auto">
+      {showCompletionPrompt && (
+        <div className="bg-gradient-to-r from-yellow-50 to-orange-50 border-2 border-yellow-400 rounded-xl p-6 mb-6 shadow-lg">
+          <div className="flex items-start gap-4">
+            <div className="flex-shrink-0">
+              <svg className="w-8 h-8 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+            </div>
+            <div className="flex-1">
+              <h2 className="text-xl font-bold text-gray-900 mb-2">Complete Your Profile</h2>
+              <p className="text-gray-700 mb-4">
+                To use all features like reporting issues and creating groups, please complete your profile by filling in at least your <strong>Full Name</strong>.
+              </p>
+              {!profile.full_name && (
+                <p className="text-red-600 font-semibold">⚠️ Full Name is required</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
       <h1 className="text-3xl font-bold text-gray-800">My Profile</h1>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

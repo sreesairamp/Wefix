@@ -17,13 +17,12 @@ export default function Leaderboard() {
     try {
       setLoading(true);
       
-      // Fetch profiles with points, ordered by points descending
+      // Fetch all profiles, ordered by points descending (including 0 points)
       let query = supabase
         .from("profiles")
         .select("id, username, full_name, email, points, avatar_url")
-        .not("points", "is", null)
-        .order("points", { ascending: false })
-        .limit(100);
+        .order("points", { ascending: false, nullsLast: true })
+        .limit(200); // Increased limit to show more users
 
       const { data, error } = await query;
 

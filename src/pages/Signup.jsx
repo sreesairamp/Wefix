@@ -11,17 +11,47 @@ export default function Signup() {
 
   const handleSignup = async (e) => {
     e.preventDefault();
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: { data: { full_name: fullName } }
-    });
+    
+    if (!fullName.trim()) {
+      return alert("Please enter your full name");
+    }
 
-    if (error) return alert(error.message);
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: { 
+          data: { full_name: fullName },
+          emailRedirectTo: `${window.location.origin}/login`
+        }
+      });
 
-    await createUserProfile(data.user);
-    alert("Signup successful!");
-    navigate("/login");
+      if (error) {
+        alert(error.message);
+        return;
+      }
+
+      // Create profile if user was created
+      if (data.user) {
+        const result = await createUserProfile(data.user);
+        if (!result.success) {
+          console.error("Profile creation failed:", result.error);
+        }
+      }
+
+      // Check if email confirmation is required
+      if (data.user && !data.session) {
+        alert("Please check your email to confirm your account before signing in!");
+        navigate("/login");
+      } else if (data.session) {
+        // Auto-logged in (if email confirmation is disabled)
+        alert("Signup successful! Completing your profile...");
+        navigate("/profile");
+      }
+    } catch (err) {
+      console.error("Signup error:", err);
+      alert("An error occurred during signup. Please try again.");
+    }
   };
 
   return (
