@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import { supabase } from "../supabaseClient";
+import { createUserProfile } from "../utils/createUserProfile";
 
 const AuthContext = createContext();
 
@@ -16,22 +17,7 @@ export function AuthProvider({ children }) {
       // If user exists, ensure profile exists
       if (user) {
         try {
-          const { data: profile } = await supabase
-            .from("profiles")
-            .select("id")
-            .eq("id", user.id)
-            .single();
-          
-          // Create profile if it doesn't exist
-          if (!profile) {
-            await supabase.from("profiles").insert([{
-              id: user.id,
-              email: user.email,
-              full_name: user.user_metadata?.full_name || user.email?.split('@')[0] || "",
-              avatar_url: user.user_metadata?.avatar_url || user.user_metadata?.picture || "",
-              points: 0
-            }]);
-          }
+          await createUserProfile(user);
         } catch (err) {
           console.error("Error checking/creating profile:", err);
         }
@@ -46,24 +32,10 @@ export function AuthProvider({ children }) {
     const { data: listener } = supabase.auth.onAuthStateChange(async (_event, session) => {
       const user = session?.user ?? null;
       
-      // Ensure profile exists when auth state changes
+      // Ensure profile exists when auth state changes (e.g., after OAuth callback)
       if (user) {
         try {
-          const { data: profile } = await supabase
-            .from("profiles")
-            .select("id")
-            .eq("id", user.id)
-            .single();
-          
-          if (!profile) {
-            await supabase.from("profiles").insert([{
-              id: user.id,
-              email: user.email,
-              full_name: user.user_metadata?.full_name || user.email?.split('@')[0] || "",
-              avatar_url: user.user_metadata?.avatar_url || user.user_metadata?.picture || "",
-              points: 0
-            }]);
-          }
+          await createUserProfile(user);
         } catch (err) {
           console.error("Error checking/creating profile:", err);
         }

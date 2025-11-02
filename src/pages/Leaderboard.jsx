@@ -18,31 +18,54 @@ export default function Leaderboard() {
       setLoading(true);
       
       // Fetch all profiles, ordered by points descending (including 0 points)
-      let query = supabase
-        .from("profiles")
-        .select("id, username, full_name, email, points, avatar_url")
-        .order("points", { ascending: false, nullsLast: true })
-        .limit(200); // Increased limit to show more users
+      // Use a larger limit and fetch in batches if needed
+      let allData = [];
+      let currentPage = 0;
+      const pageSize = 1000; // Fetch up to 1000 users per page
+      let hasMore = true;
 
-      const { data, error } = await query;
+      while (hasMore) {
+        const { data, error } = await supabase
+          .from("profiles")
+          .select("id, username, full_name, email, points, avatar_url")
+          .order("points", { ascending: false, nullsLast: true })
+          .range(currentPage * pageSize, (currentPage + 1) * pageSize - 1);
 
-      if (error) {
-        console.error("Error fetching leaderboard:", error);
-        setLeaderboard([]);
-      } else {
-        const sortedData = (data || []).sort((a, b) => (b.points || 0) - (a.points || 0));
-        setLeaderboard(sortedData);
-        
-        // Find current user's rank
-        if (user) {
-          const rank = sortedData.findIndex((p) => p.id === user.id) + 1;
-          const userData = sortedData.find((p) => p.id === user.id);
-          if (userData) {
-            setUserRank({
-              rank: rank || sortedData.length + 1,
-              ...userData,
-            });
+        if (error) {
+          console.error("Error fetching leaderboard:", error);
+          setLeaderboard([]);
+          return;
+        }
+
+        if (data && data.length > 0) {
+          allData = [...allData, ...data];
+          currentPage++;
+          // If we got less than pageSize, we've reached the end
+          if (data.length < pageSize) {
+            hasMore = false;
           }
+        } else {
+          hasMore = false;
+        }
+      }
+
+      // Ensure data is sorted by points (descending)
+      const sortedData = (allData || []).sort((a, b) => {
+        const pointsA = a.points || 0;
+        const pointsB = b.points || 0;
+        return pointsB - pointsA;
+      });
+      setLeaderboard(sortedData);
+      
+      // Find current user's rank
+      if (user) {
+        const rank = sortedData.findIndex((p) => p.id === user.id) + 1;
+        const userData = sortedData.find((p) => p.id === user.id);
+        if (userData) {
+          setUserRank({
+            rank: rank || sortedData.length + 1,
+            ...userData,
+          });
         }
       }
     } catch (err) {
